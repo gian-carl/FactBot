@@ -1,86 +1,120 @@
 """
-test_stt.py – Voice‑to‑Text Accuracy Test
-
-This script records 3 seconds of audio after you press Enter,
-sends it to Google's speech recognition, and prints the result.
+wake_word_demo.py – Continuous voice interaction with wake word "hey"
+Fixed to ensure TTS works repeatedly.
 """
 
 import sounddevice as sd
 import numpy as np
 import speech_recognition as sr
+import pyttsx3
 import queue
 import time
 
+# ----------------------------------------------------------------------
+# Audio recording function
+# ----------------------------------------------------------------------
 def record_audio(duration=3, samplerate=16000):
-    """
-    Record audio for a fixed duration (seconds) using sounddevice.
-    Returns the audio as bytes in 16‑bit PCM format (suitable for speech_recognition).
-    """
+    """Record audio for a fixed duration and return bytes."""
     audio_queue = queue.Queue()
 
     def callback(indata, frames, time, status):
-        """Called for each audio block; put it into the queue."""
         audio_queue.put(indata.copy())
 
-    # Start the input stream
     with sd.InputStream(samplerate=samplerate, channels=1, callback=callback):
-        # Calculate number of blocks to collect for the given duration
-        # 512 is a typical block size, but we can compute dynamically:
         blocks_per_second = samplerate / 512
         total_blocks = int(duration * blocks_per_second)
 
         chunks = []
         for _ in range(total_blocks):
             try:
-                # Wait up to 0.5 seconds for a block (should be plenty)
                 chunk = audio_queue.get(timeout=0.5)
                 chunks.append(chunk)
             except queue.Empty:
-                # If we run out of data, stop early
                 break
 
-        # Concatenate all chunks into one array
+        if not chunks:
+            return None
         audio_data = np.concatenate(chunks, axis=0)
-
-        # Convert float64 samples (-1..1) to 16‑bit integer bytes
         audio_bytes = (audio_data * 32767).astype(np.int16).tobytes()
-
         return audio_bytes
 
+# ----------------------------------------------------------------------
+# Speech recognition helper
+# ----------------------------------------------------------------------
+def listen_for_phrase(recognizer, duration=3):
+    """Record audio, transcribe, return text or None."""
+    audio_bytes = record_audio(duration)
+    if audio_bytes is None:
+        return None
+    audio = sr.AudioData(audio_bytes, 16000, 2)
+    try:
+        text = recognizer.recognize_google(audio)
+        return text.lower()
+    except sr.UnknownValueError:
+        return None
+    except sr.RequestError:
+        return None
+
+# ----------------------------------------------------------------------
+# Text‑to‑speech with a fresh engine each time (ensures it works)
+# ----------------------------------------------------------------------
+def speak(text):
+    """Speak the given text using a new pyttsx3 engine."""
+    engine = pyttsx3.init()
+    engine.setProperty('rate', 170)
+    engine.setProperty('volume', 0.9)
+    engine.say(text)
+    engine.runAndWait()
+    engine.stop()
+    # Optional small delay to let the engine clean up
+    time.sleep(0.1)
+
+# ----------------------------------------------------------------------
+# Main loop
+# ----------------------------------------------------------------------
 def main():
     recognizer = sr.Recognizer()
-    print("🎤 Voice‑to‑Text Accuracy Test")
-    print("==============================")
-    print("Speak a phrase after pressing Enter.")
-    print("Type 'stop' to exit.\n")
+
+    speak("Wake word demo started. Say 'hey' to activate.")
+    print("Bot: Wake word demo started. Say 'hey' to activate.\n")
 
     while True:
-        input("⏎  Press Enter when ready to speak...")
-        print("🎙️  Listening (3 seconds)...", end='', flush=True)
+        print("Listening for wake word 'hey'...")
+        phrase = listen_for_phrase(recognizer, duration=3)
 
-        # Record audio
-        try:
-            audio_bytes = record_audio(duration=3)
-        except Exception as e:
-            print(f"\n⚠️  Recording error: {e}")
+        if phrase is None:
             continue
 
-        # Create an AudioData object for speech_recognition
-        audio = sr.AudioData(audio_bytes, 16000, 2)
+        print(f"User: {phrase}")
 
-        # Send to Google
-        try:
-            text = recognizer.recognize_google(audio)
-            print(f"\r📝 You said: {text}")
-        except sr.UnknownValueError:
-            print("\r😕 Sorry, I could not understand that.")
-        except sr.RequestError as e:
-            print(f"\r🌐 Speech recognition service error: {e}")
-
-        # Stop condition
-        if text.lower() in ["stop", "exit", "quit"]:
-            print("👋 Goodbye!")
+        # Check for exit command (can be said anytime)
+        if "stop" in phrase or "exit" in phrase:
+            speak("Goodbye!")
+            print("Bot: Goodbye!")
             break
+
+        # Check for wake word
+        if "hey" in phrase:
+            speak("Yes?")
+            print("Bot: Yes?")
+
+            # Now listen for the actual command
+            print("Listening for command...")
+            command = listen_for_phrase(recognizer, duration=4)
+            if command is None:
+                speak("Sorry, I didn't catch that.")
+                print("Bot: Sorry, I didn't catch that.")
+                continue
+
+            print(f"User: {command}")
+
+            # Speak back what the user said (for testing)
+            response = f"You said: {command}"
+            speak(response)
+            print(f"Bot: {response}")
+
+        else:
+            print("(Not a wake word, continuing...)")
 
 if __name__ == "__main__":
     main()
